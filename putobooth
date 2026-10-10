@@ -1,0 +1,80 @@
+import sys
+import cv2
+import numpy as np
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget
+
+class CameraWorker(QThread):
+    frame_signal = pyqtSignal(np.ndarray)
+
+    def __init__(self, camera_index=0):
+        super().__init__()
+        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_ANY)
+        self.running = True
+
+    def run(self):
+        while self.running and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if ret:
+                self.frame_signal.emit(frame)
+
+    def stop(self):
+        self.running = False
+        self.wait()
+        if self.cap.isOpened():
+            self.cap.release()
+
+class PhotoboothApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Offline Desktop Photobooth")
+        self.setStyleSheet("background-color: #F5F2EB; color: #333333;")
+        self.resize(1024, 768)
+        
+        layout = QVBoxLayout(self)
+        
+        # Viewfinder Display Panel
+        self.viewfinder = QLabel("Initializing Camera...")
+        self.viewfinder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.viewfinder.setStyleSheet("background-color: #000000; color: #FFFFFF; border-radius: 10px;")
+        layout.addWidget(self.viewfinder, stretch=4)
+        
+        # Interactive Controls
+        btn_layout = QHBoxLayout()
+        self.shutter_btn = QPushButton("Capture Photo")
+        self.shutter_btn.setStyleSheet("background-color: #FFD43B; font-weight: bold; font-size: 18px; padding: 15px; border-radius: 8px;")
+        self.shutter_btn.clicked.connect(self.trigger_capture)
+        btn_layout.addWidget(self.shutter_btn)
+        layout.addLayout(btn_layout, stretch=1)
+        
+        # Start Camera Background Worker
+        self.worker = CameraWorker(0)
+        self.worker.frame_signal.connect(self.update_frame)
+        self.worker.start()
+        self.current_frame = None
+
+    def update_frame(self, frame):
+        self.current_frame = frame
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_frame.shape
+        qt_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        self.viewfinder.setPixmap(QPixmap.fromImage(qt_img).scaled(
+            self.viewfinder.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        ))
+
+    def trigger_capture(self):
+        if self.current_frame is not None:
+            cv2.imwrite("captured_session.jpg", self.current_frame)
+            self.shutter_btn.setText("Photo Saved!")
+            QTimer.singleShot(1500, lambda: self.shutter_btn.setText("Capture Photo"))
+
+    def closeEvent(self, event):
+        self.worker.stop()
+        event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = PhotoboothApp()
+    window.show()
+    sys.exit(app.exec())
